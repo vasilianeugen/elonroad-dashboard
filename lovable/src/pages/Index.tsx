@@ -37,6 +37,7 @@ import {
   toNumber,
 } from "@/lib/dashboardData";
 import { buildChargerNameLookup, getChargerDisplayName } from "@/lib/chargerNames";
+import { buildVehicleNameLookup, getVehicleDisplayName } from "@/lib/vehicleNames";
 import { exportSessionsToCSV, exportVehicleSummaryToCSV, exportEnergyReportToCSV } from "@/utils/exportUtils";
 
 const LIVE_COLORS = [
@@ -71,9 +72,19 @@ const Index = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [liveSelectionInitialized, setLiveSelectionInitialized] = useState(false);
 
+  const vehicleNameLookup = useMemo(() => {
+    const vehicleIds = [
+      ...(liveData?.vehicles ?? []).map((row) => row.vehicle_id),
+      ...(liveData?.sessions ?? []).map((row) => row.vehicle_id),
+    ].filter(Boolean);
+
+    return buildVehicleNameLookup(vehicleIds);
+  }, [liveData?.sessions, liveData?.vehicles]);
+
   const liveVehicles = useMemo<VehicleStats[]>(() => {
     const rows = liveData?.vehicles ?? [];
-    if (rows.length === 0) return [];
+    const sessionRows = liveData?.sessions ?? [];
+    if (rows.length === 0 && sessionRows.length === 0) return [];
 
     const byVehicle = new Map<
       string,
@@ -93,17 +104,31 @@ const Index = () => {
       const averageDuration = toNumber(row.average_duration_minutes);
       const next = current ?? {
         id: row.vehicle_id,
-        name: row.vehicle_name || row.vehicle_id,
+        name: getVehicleDisplayName(row.vehicle_id, vehicleNameLookup, row.vehicle_name),
         totalEnergyKwh: 0,
         totalDurationMinutes: 0,
         totalSessions: 0,
       };
 
-      next.name = row.vehicle_name || next.name;
+      next.name = getVehicleDisplayName(row.vehicle_id, vehicleNameLookup, row.vehicle_name);
       next.totalEnergyKwh += totalEnergyKwh;
       next.totalDurationMinutes += averageDuration * sessions;
       next.totalSessions += sessions;
       byVehicle.set(row.vehicle_id, next);
+    });
+
+    sessionRows.forEach((row) => {
+      if (byVehicle.has(row.vehicle_id)) return;
+      const energyKwh = toNumber(row.energy_kwh);
+      if (energyKwh <= MIN_CHARGING_SESSION_KWH) return;
+
+      byVehicle.set(row.vehicle_id, {
+        id: row.vehicle_id,
+        name: getVehicleDisplayName(row.vehicle_id, vehicleNameLookup, row.vehicle_name),
+        totalEnergyKwh: energyKwh,
+        totalDurationMinutes: toNumber(row.duration_minutes),
+        totalSessions: 1,
+      });
     });
 
     return Array.from(byVehicle.values()).map((row, index) => {
@@ -119,7 +144,7 @@ const Index = () => {
         color: LIVE_COLORS[index % LIVE_COLORS.length],
       };
     });
-  }, [liveData?.vehicles]);
+  }, [liveData?.sessions, liveData?.vehicles, vehicleNameLookup]);
 
   const chargerNameLookup = useMemo(() => {
     const chargerIds = [
