@@ -109,7 +109,7 @@ def _build_loki_session_and_vehicle_aggregates(db, tenant_key: str) -> int:
         first = session_rows[0]
         last = session_rows[-1]
         started_at = first.session_started_at or first.sampled_at
-        ended_at = last.sampled_at
+        ended_at = _payload_transfer_session_end(last.payload) or last.sampled_at
         duration_minutes = _duration_minutes(started_at, ended_at)
         meter_values = [
             row.meter_total_input_wh
@@ -136,16 +136,19 @@ def _build_loki_session_and_vehicle_aggregates(db, tenant_key: str) -> int:
         if energy_kwh <= Decimal("0"):
             continue
 
+        start_soc_percent, end_soc_percent = _session_soc_range(session_rows)
+
         state_counts = Counter(
             row.energy_link_state or row.device_state or "unknown"
             for row in session_rows
         )
         source = str(first.labels.get("source") or "loki") if isinstance(first.labels, dict) else "loki"
+        charger_id = _session_remote_device_id(session_rows) or first.host_name
         db.add(
             ChargingSessionSummary(
                 tenant_key=tenant_key,
                 source=source,
-                host_name=first.host_name,
+                host_name=charger_id,
                 session_id=session_id,
                 vehicle_id=vehicle_id,
                 vehicle_name=_latest_non_empty(row.vehicle_name for row in session_rows),
@@ -154,6 +157,8 @@ def _build_loki_session_and_vehicle_aggregates(db, tenant_key: str) -> int:
                 ended_at=ended_at,
                 duration_minutes=duration_minutes,
                 energy_kwh=energy_kwh,
+                start_soc_percent=start_soc_percent,
+                end_soc_percent=end_soc_percent,
                 meter_start_wh=meter_start,
                 meter_end_wh=meter_end,
                 sample_count=len(session_rows),
@@ -168,7 +173,7 @@ def _build_loki_session_and_vehicle_aggregates(db, tenant_key: str) -> int:
             {
                 "event_date": event_date,
                 "source": source,
-                "host_name": first.host_name,
+                "host_name": charger_id,
                 "vehicle_id": vehicle_id,
                 "vehicle_name": first.vehicle_name,
                 "vehicle_type": first.vehicle_type,
@@ -415,6 +420,92 @@ def _payload_transfer_session_start(payload: dict | None) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _payload_transfer_session_end(payload: dict | None) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    value = (
+        payload.get("EnergyLink", {})
+        .get("TransferSession", {})
+        .get("End")
+    )
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _session_soc_range(rows: list[LokiVehicleSnapshot]) -> tuple[Decimal | None, Decimal | None]:
+    range_min_values: list[Decimal] = []
+    range_max_values: list[Decimal] = []
+    for row in rows:
+        transfer_session = (
+            row.payload.get("EnergyLink", {}).get("TransferSession", {})
+            if isinstance(row.payload, dict)
+            else {}
+        )
+        local_range = transfer_session.get("LocalSoCRange", {}) if isinstance(transfer_session, dict) else {}
+        start_soc = _decimal_from_nested(local_range, "Min", "Percent")
+        end_soc = _decimal_from_nested(local_range, "Max", "Percent")
+        if start_soc is not None:
+            range_min_values.append(start_soc)
+        if end_soc is not None:
+            range_max_values.append(end_soc)
+
+    if range_min_values or range_max_values:
+        return (
+            min(range_min_values) if range_min_values else None,
+            max(range_max_values) if range_max_values else None,
+        )
+
+    soc_values = [Decimal(row.battery_soc_percent) for row in rows if row.battery_soc_percent is not None]
+    if not soc_values:
+        return None, None
+    return min(soc_values), max(soc_values)
+
+
+def _session_remote_device_id(rows: list[LokiVehicleSnapshot]) -> str | None:
+    for row in rows:
+        if isinstance(row.labels, dict):
+            label_value = row.labels.get("remote_device_id")
+            if label_value:
+                return str(label_value)
+        transfer_session = (
+            row.payload.get("EnergyLink", {}).get("TransferSession", {})
+            if isinstance(row.payload, dict)
+            else {}
+        )
+        remote_device = transfer_session.get("RemoteDevice", {}) if isinstance(transfer_session, dict) else {}
+        remote_name = remote_device.get("Name") if isinstance(remote_device, dict) else None
+        remote_id = _remote_device_id(str(remote_name)) if remote_name else None
+        if remote_id:
+            return remote_id
+    return None
+
+
+def _remote_device_id(remote_device_name: str) -> str | None:
+    parts = remote_device_name.split("/")
+    if len(parts) >= 3 and parts[2]:
+        return parts[2]
+    return remote_device_name or None
+
+
+def _decimal_from_nested(payload: dict | None, *path: str) -> Decimal | None:
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if current is None:
+        return None
+    try:
+        value = Decimal(str(current))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return value if value.is_finite() else None
 
 
 def _transfer_session_energy_wh_values(payload: dict | None) -> list[Decimal]:

@@ -101,8 +101,13 @@ class LokiClient:
         topic = topic_match.group(1).strip() if topic_match else None
         topic_parts = topic.split("/") if topic else []
         topic_device_id = topic_parts[2] if len(topic_parts) > 2 else None
+        topic_device_type = topic_parts[3] if len(topic_parts) > 3 else None
 
         sampled_at = datetime.fromtimestamp(int(ts) / 1_000_000_000, tz=timezone.utc)
+        remote_device_name = _as_string(
+            _get_nested(payload, "EnergyLink", "TransferSession", "RemoteDevice", "Name")
+        )
+        remote_device_id = _remote_device_id(remote_device_name)
         session_id = _as_string(
             _get_nested(payload, "EnergyLink", "TransferSession", "RemoteDevice", "CorrelationId")
         ) or _as_string(_get_nested(payload, "Session", "Id"))
@@ -121,7 +126,7 @@ class LokiClient:
             "session_id": session_id,
             "session_started_at": session_started_at,
             "vehicle_name": _as_string(_get_nested(payload, "CustomData", "VehicleName")),
-            "vehicle_type": _as_string(_get_nested(payload, "CustomData", "VehicleType")),
+            "vehicle_type": _as_string(_get_nested(payload, "CustomData", "VehicleType")) or topic_device_type,
             "energy_link_state": _as_string(_get_nested(payload, "EnergyLink", "State")),
             "device_state": _as_string(_get_nested(payload, "State", "State")),
             "meter_total_input_wh": _decimal_or_none(_get_nested(payload, "Meter", "TotalInput", "WattHours")),
@@ -129,7 +134,7 @@ class LokiClient:
             "meter_voltage_v": _decimal_or_none(_get_nested(payload, "Meter", "Voltage", "Volts")),
             "meter_current_a": _decimal_or_none(_get_nested(payload, "Meter", "Current", "Amps")),
             "battery_soc_percent": _decimal_or_none(_get_nested(payload, "BatteryInfo", "StateOfCharge", "Percent")),
-            "labels": labels,
+            "labels": {**labels, "remote_device_id": remote_device_id, "remote_device_name": remote_device_name},
             "payload": payload,
         }
 
@@ -154,6 +159,15 @@ def _as_string(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _remote_device_id(remote_device_name: str | None) -> str | None:
+    if not remote_device_name:
+        return None
+    parts = remote_device_name.split("/")
+    if len(parts) >= 3 and parts[2]:
+        return parts[2]
+    return remote_device_name
 
 
 def _decimal_or_none(value: Any) -> Decimal | None:

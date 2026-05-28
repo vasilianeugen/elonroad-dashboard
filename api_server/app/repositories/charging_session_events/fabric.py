@@ -66,8 +66,7 @@ table("{_escape_kql_string(table)}")
     EventName = tostring(column_ifexists("{name_column}", "")),
     RawPayload = tostring(column_ifexists("{payload_column}", "")),
     IngestedAt = ingestion_time()
-| where EventName == "PhysicalDeviceEvent_Changed"
-| where RawPayload has "TransferSession"
+| where EventName startswith "EnergyNetworkTransferSessionsEvent_"
 | order by IngestedAt asc
 """
 
@@ -86,14 +85,13 @@ table("{_escape_kql_string(table)}")
             event_name = str(row["EventName"] or "")
             raw_payload = row["RawPayload"]
             sampled_at = _as_utc(row["IngestedAt"])
-            parsed = _parse_fabric_payload(
+            parsed_snapshots = _parse_fabric_payload(
                 raw_payload=raw_payload,
                 event_name=event_name,
                 sampled_at=sampled_at,
                 fallback_host_name=host_name,
             )
-            if parsed is not None:
-                snapshots.append(parsed)
+            snapshots.extend(parsed_snapshots)
         return snapshots
 
 
@@ -102,18 +100,122 @@ def _parse_fabric_payload(
     event_name: str,
     sampled_at: datetime,
     fallback_host_name: str | None,
-) -> dict[str, Any] | None:
+) -> list[dict[str, Any]]:
     payload = _coerce_payload(raw_payload)
     if payload is None:
-        return None
+        return []
 
     payload = _unwrap_payload(payload)
     if not isinstance(payload, dict):
-        return None
+        return []
 
-    if event_name != "PhysicalDeviceEvent_Changed":
-        return None
+    if event_name.startswith("EnergyNetworkTransferSessionsEvent_"):
+        return _parse_energy_network_transfer_sessions_event(
+            payload=payload,
+            event_name=event_name,
+            sampled_at=sampled_at,
+            fallback_host_name=fallback_host_name,
+        )
 
+    return []
+
+
+def _parse_energy_network_transfer_sessions_event(
+    payload: dict[str, Any],
+    event_name: str,
+    sampled_at: datetime,
+    fallback_host_name: str | None,
+) -> list[dict[str, Any]]:
+    det_sessions = payload.get("DetSessions") if isinstance(payload.get("DetSessions"), dict) else {}
+    identity = det_sessions.get("DeviceId") if isinstance(det_sessions.get("DeviceId"), dict) else {}
+    device_id = _as_string(identity.get("Id")) if identity else None
+    device_type = _as_string(identity.get("Type")) if identity else None
+    device_version = _as_string(identity.get("Version")) if identity else None
+    device_name = _as_string(det_sessions.get("DeviceName"))
+    if device_type != "vehicle" or not device_id:
+        return []
+
+    event_timestamp = _parse_datetime(det_sessions.get("Timestamp")) or sampled_at
+    et_sessions = det_sessions.get("EtSessions")
+    if not isinstance(et_sessions, list):
+        return []
+
+    snapshots: list[dict[str, Any]] = []
+    for index, et_session in enumerate(et_sessions):
+        if not isinstance(et_session, dict):
+            continue
+
+        remote_device = et_session.get("RemoteDevice") if isinstance(et_session.get("RemoteDevice"), dict) else {}
+        session_id = _as_string(remote_device.get("CorrelationId"))
+        session_started_at = _parse_datetime(et_session.get("Start"))
+        session_ended_at = _parse_datetime(et_session.get("End"))
+        remote_device_id = _remote_device_id(remote_device)
+        if not session_id or not session_started_at:
+            continue
+
+        transfer_session = dict(et_session)
+        normalized_payload = {
+            "EnergyLink": {
+                "State": "Completed" if session_ended_at else "Connected",
+                "TransferSession": transfer_session,
+            },
+            "FabricEvent": {
+                "Name": event_name,
+                "ClusterId": payload.get("ClusterId"),
+                "NetworkId": payload.get("NetworkId"),
+                "DeviceId": identity,
+                "DeviceName": device_name,
+                "Timestamp": det_sessions.get("Timestamp"),
+            },
+        }
+
+        hash_material = json.dumps(normalized_payload, sort_keys=True, default=str)
+        snapshots.append(
+            {
+                "line_hash": sha256(
+                    f"fabric:{event_timestamp.isoformat()}:{event_name}:{index}:{hash_material}".encode("utf-8")
+                ).hexdigest(),
+                "host_name": remote_device_id or fallback_host_name or "fabric",
+                "unit": "fabric.eventstream",
+                "sampled_at": session_ended_at or event_timestamp,
+                "topic": (
+                    f"fabric/{device_type}/{device_version}/{device_id}"
+                    if device_type and device_version and device_id
+                    else event_name
+                ),
+                "topic_device_id": device_id,
+                "session_id": session_id,
+                "session_started_at": session_started_at,
+                "vehicle_name": device_name,
+                "vehicle_type": device_type,
+                "energy_link_state": "Completed" if session_ended_at else "Connected",
+                "device_state": "EnergyTransfer",
+                "meter_total_input_wh": None,
+                "meter_total_output_wh": None,
+                "meter_voltage_v": None,
+                "meter_current_a": None,
+                "battery_soc_percent": _decimal_or_none(_get_nested(et_session, "LocalSoCRange", "Max", "Percent")),
+                "labels": {
+                    "source": "fabric",
+                    "event_name": event_name,
+                    "device_type": device_type,
+                    "device_id": device_id,
+                    "device_name": device_name,
+                    "remote_device_id": remote_device_id,
+                },
+                "payload": normalized_payload,
+            }
+        )
+
+    return snapshots
+
+
+def _parse_physical_device_event_payload(
+    payload: dict[str, Any],
+    event_name: str,
+    sampled_at: datetime,
+    fallback_host_name: str | None,
+) -> dict[str, Any] | None:
     device_payload = payload.get("Device")
     if not isinstance(device_payload, dict):
         device_payload = payload
@@ -245,6 +347,15 @@ def _get_nested(payload: dict[str, Any], *path: str) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def _remote_device_id(remote_device: dict[str, Any]) -> str | None:
+    name = _as_string(remote_device.get("Name"))
+    if name:
+        parts = name.split("/")
+        if len(parts) >= 3 and parts[2]:
+            return parts[2]
+    return _as_string(remote_device.get("Id"))
 
 
 def _as_string(value: Any) -> str | None:

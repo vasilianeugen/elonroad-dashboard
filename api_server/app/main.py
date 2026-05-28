@@ -10,13 +10,13 @@ from app.routers import aggregates, dashboard, health, loki, prometheus
 from app.services.loki_sync import run_loki_sync_loop
 from app.services.prometheus_sync import run_prometheus_sync_loop
 
-
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     sync_tasks: list[asyncio.Task[None]] = []
+
     if settings.prometheus_sync_enabled and settings.prometheus_configured:
         sync_tasks.append(asyncio.create_task(run_prometheus_sync_loop()))
     if settings.charging_session_sync_enabled and settings.charging_session_source_configured:

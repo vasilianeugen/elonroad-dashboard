@@ -59,6 +59,8 @@ class ChargingSessionSummary(TenantMixin, TimestampMixin, Base):
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_minutes: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     energy_kwh: Mapped[Decimal] = mapped_column(Numeric(14, 4), nullable=False, default=0)
+    start_soc_percent: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    end_soc_percent: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     meter_start_wh: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     meter_end_wh: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     sample_count: Mapped[int] = mapped_column(nullable=False, default=0)

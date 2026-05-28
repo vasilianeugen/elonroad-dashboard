@@ -81,6 +81,8 @@ export interface SessionSummary {
   ended_at?: string;
   duration_minutes: string;
   energy_kwh: string;
+  start_soc_percent?: string;
+  end_soc_percent?: string;
   meter_start_wh?: string;
   meter_end_wh?: string;
   sample_count: number;

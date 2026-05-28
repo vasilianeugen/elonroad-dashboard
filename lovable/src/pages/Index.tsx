@@ -36,6 +36,7 @@ import {
   splitIsoDateTime,
   toNumber,
 } from "@/lib/dashboardData";
+import { buildChargerNameLookup, getChargerDisplayName } from "@/lib/chargerNames";
 import { exportSessionsToCSV, exportVehicleSummaryToCSV, exportEnergyReportToCSV } from "@/utils/exportUtils";
 
 const LIVE_COLORS = [
@@ -120,6 +121,15 @@ const Index = () => {
     });
   }, [liveData?.vehicles]);
 
+  const chargerNameLookup = useMemo(() => {
+    const chargerIds = [
+      ...(liveData?.chargers ?? []).map((row) => row.charger_id),
+      ...(liveData?.sessions ?? []).map((row) => row.host_name),
+    ].filter(Boolean);
+
+    return buildChargerNameLookup(chargerIds);
+  }, [liveData?.chargers, liveData?.sessions]);
+
   const liveChargers = useMemo<ChargerStats[]>(() => {
     const rows = liveData?.chargers ?? [];
     const sessionRows = liveData?.sessions ?? [];
@@ -144,14 +154,14 @@ const Index = () => {
       const averageDuration = toNumber(row.average_duration_minutes);
       const next = current ?? {
         id: row.charger_id,
-        name: row.charger_name || row.charger_id,
+        name: getChargerDisplayName(row.charger_id, chargerNameLookup, row.charger_name),
         totalEnergyKwh: 0,
         totalDurationMinutes: 0,
         totalSessions: 0,
         hasSessionData: false,
       };
 
-      next.name = row.charger_name || next.name;
+      next.name = getChargerDisplayName(row.charger_id, chargerNameLookup, row.charger_name);
       next.totalEnergyKwh += totalEnergyKwh;
       next.totalDurationMinutes += averageDuration * sessions;
       next.totalSessions += sessions;
@@ -167,7 +177,7 @@ const Index = () => {
       const durationMinutes = toNumber(row.duration_minutes);
       const next = current ?? {
         id: chargerId,
-        name: chargerId,
+        name: getChargerDisplayName(chargerId, chargerNameLookup),
         totalEnergyKwh: 0,
         totalDurationMinutes: 0,
         totalSessions: 0,
@@ -181,7 +191,7 @@ const Index = () => {
         next.hasSessionData = true;
       }
 
-      next.name = next.name || chargerId;
+      next.name = next.name || getChargerDisplayName(chargerId, chargerNameLookup);
       next.totalEnergyKwh += energyKwh;
       next.totalDurationMinutes += durationMinutes;
       next.totalSessions += 1;
@@ -201,7 +211,7 @@ const Index = () => {
         color: LIVE_COLORS[(index + 2) % LIVE_COLORS.length],
       };
     });
-  }, [liveData?.chargers, liveData?.sessions]);
+  }, [chargerNameLookup, liveData?.chargers, liveData?.sessions]);
 
   const liveSessions = useMemo<ChargingSession[]>(() => {
     const rows = liveData?.sessions ?? [];
@@ -212,6 +222,10 @@ const Index = () => {
       const end = splitIsoDateTime(row.ended_at ?? row.started_at);
       const energyKwh = toNumber(row.energy_kwh);
       if (energyKwh <= MIN_CHARGING_SESSION_KWH) return [];
+      const startSoC = row.start_soc_percent == null ? 0 : toNumber(row.start_soc_percent);
+      const endSoC = row.end_soc_percent == null ? energyKwh / KWH_PER_PERCENT : toNumber(row.end_soc_percent);
+      const chargeAdded = Math.max(endSoC - startSoC, 0);
+      if (chargeAdded <= 0) return [];
       return {
         id: row.session_id,
         vehicleId: row.vehicle_id,
@@ -221,10 +235,10 @@ const Index = () => {
         date: start.date,
         startTime: start.time,
         endTime: end.time,
-        startSoC: 0,
-        endSoC: energyKwh / KWH_PER_PERCENT,
-        chargeAdded: energyKwh / KWH_PER_PERCENT,
-        chargingSpeed: toNumber(row.duration_minutes) > 0 ? energyKwh / KWH_PER_PERCENT / toNumber(row.duration_minutes) : 0,
+        startSoC,
+        endSoC,
+        chargeAdded,
+        chargingSpeed: toNumber(row.duration_minutes) > 0 ? chargeAdded / toNumber(row.duration_minutes) : 0,
         duration: toNumber(row.duration_minutes),
       };
     });

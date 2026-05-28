@@ -11,6 +11,7 @@ from app.repositories.charging_session_events import get_charging_session_event_
 from app.services.aggregate_rebuild import rebuild_ui_aggregates_in_session
 
 logger = logging.getLogger("uvicorn.error")
+STARTUP_CHUNK_MAX_ATTEMPTS = 3
 
 
 async def run_loki_sync_loop() -> None:
@@ -109,12 +110,13 @@ async def sync_loki_range_chunked(
 
     while cursor < end:
         chunk_end = min(cursor + chunk_size, end)
-        result = await sync_loki_range(
+        result = await _sync_loki_range_with_retries(
             start=cursor,
             end=chunk_end,
             host_name=host_name,
             source=source,
             message=message,
+            max_attempts=STARTUP_CHUNK_MAX_ATTEMPTS,
         )
         total_fetched += int(result.get("rows_fetched", 0))
         total_written += int(result.get("rows_written", 0))
@@ -129,6 +131,41 @@ async def sync_loki_range_chunked(
         "start": start.isoformat(),
         "end": end.isoformat(),
     }
+
+
+async def _sync_loki_range_with_retries(
+    start: datetime,
+    end: datetime,
+    host_name: str | None,
+    source: str,
+    message: str | None,
+    max_attempts: int,
+) -> dict[str, int | str]:
+    attempt = 1
+    while True:
+        try:
+            return await sync_loki_range(
+                start=start,
+                end=end,
+                host_name=host_name,
+                source=source,
+                message=message,
+            )
+        except Exception:
+            if attempt >= max_attempts:
+                raise
+            delay_seconds = min(2 ** attempt, 10)
+            logger.warning(
+                "Charging session event chunk sync failed; retrying attempt=%s/%s start=%s end=%s delay_seconds=%s",
+                attempt + 1,
+                max_attempts,
+                start.isoformat(),
+                end.isoformat(),
+                delay_seconds,
+                exc_info=True,
+            )
+            await asyncio.sleep(delay_seconds)
+            attempt += 1
 
 
 async def sync_loki_range(

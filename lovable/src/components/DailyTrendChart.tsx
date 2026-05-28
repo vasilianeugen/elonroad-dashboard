@@ -55,7 +55,19 @@ export const DailyTrendChart = ({
     return allData.slice(startIndex, Math.max(endIndex, startIndex + 1));
   }, [allData, sliderRange]);
 
-  const filteredVehicles = vehicles.filter(
+  // Paletă extinsă de culori (20 nuanțe)
+  const colorPalette = [
+    '#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf',
+    '#393b79', '#637939', '#8c6d31', '#843c39', '#7b4173', '#5254a3', '#9c9ede', '#6b6ecf', '#b5cf6b', '#cedb9c'
+  ];
+
+  // Atribuie automat o culoare unică fiecărui vehicul dacă nu are definită
+  const vehiclesWithColor = vehicles.map((v, idx) => ({
+    ...v,
+    color: v.color || colorPalette[idx % colorPalette.length],
+  }));
+
+  const filteredVehicles = vehiclesWithColor.filter(
     (v) => selectedVehicles.length === 0 || selectedVehicles.includes(v.id)
   );
   const usingAggregateSeries = allData.some((row) => "aggregateTotal" in row);
@@ -142,7 +154,7 @@ export const DailyTrendChart = ({
                   if (name === "aggregateTotal") {
                     return [`${value.toFixed(value > 0 && value < 1 ? 3 : 1)} ${unit}`, language === "en" ? "Database aggregate" : "Databasaggregat"];
                   }
-                  const vehicle = vehicles.find((v) => v.id === name);
+                  const vehicle = vehiclesWithColor.find((v) => v.id === name);
                   return [`${value.toFixed(1)} ${unit}`, vehicle?.name || name];
                 }}
               />
@@ -153,7 +165,7 @@ export const DailyTrendChart = ({
                   if (value === "aggregateTotal") {
                     return language === "en" ? "Database aggregate" : "Databasaggregat";
                   }
-                  const vehicle = vehicles.find((v) => v.id === value);
+                  const vehicle = vehiclesWithColor.find((v) => v.id === value);
                   return vehicle?.name || value;
                 }}
               />

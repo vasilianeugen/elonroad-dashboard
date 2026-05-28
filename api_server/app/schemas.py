@@ -82,6 +82,8 @@ class ChargingSessionSummaryRead(BaseModel):
     ended_at: datetime
     duration_minutes: Decimal
     energy_kwh: Decimal
+    start_soc_percent: Decimal | None
+    end_soc_percent: Decimal | None
     meter_start_wh: Decimal | None
     meter_end_wh: Decimal | None
     sample_count: int
