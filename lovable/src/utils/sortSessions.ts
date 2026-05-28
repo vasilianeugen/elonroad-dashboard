@@ -2,6 +2,7 @@ import type { ChargingSession } from "@/types/dashboard";
 
 export type SessionSortField =
   | "date"
+  | "startTime"
   | "vehicle"
   | "charger"
   | "duration"
@@ -13,6 +14,13 @@ export type SessionSortDirection = "asc" | "desc";
 
 const KWH_PER_SOC_PERCENT = 0.27;
 const KWH_PER_SOC = 2.36;
+
+const sessionStartMs = (session: ChargingSession): number => {
+  const timestamp = session.startedAt
+    ? Date.parse(session.startedAt)
+    : Date.parse(`${session.date}T${session.startTime || "00:00:00"}Z`);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
 
 export interface SortSessionOptions {
   sortField: SessionSortField;
@@ -35,7 +43,8 @@ export const sortSessions = (
     let primary = 0;
     switch (sortField) {
       case "date":
-        primary = a.date.localeCompare(b.date) * multiplier;
+      case "startTime":
+        primary = (sessionStartMs(a) - sessionStartMs(b)) * multiplier;
         break;
       case "vehicle":
         primary = getVehicleName(a.vehicleId).localeCompare(getVehicleName(b.vehicleId)) * multiplier;
@@ -57,8 +66,6 @@ export const sortSessions = (
         break;
     }
     if (primary !== 0) return primary;
-    const dateCmp = b.date.localeCompare(a.date);
-    if (dateCmp !== 0) return dateCmp;
-    return (b.startTime || "").localeCompare(a.startTime || "");
+    return sessionStartMs(b) - sessionStartMs(a);
   });
 };

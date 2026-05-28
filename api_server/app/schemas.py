@@ -8,6 +8,7 @@ class PrometheusMetricSnapshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     instance: str
     metric_name: str
     sampled_at: datetime
@@ -19,6 +20,7 @@ class LokiVehicleSnapshotRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     host_name: str
     unit: str
     sampled_at: datetime
@@ -42,6 +44,7 @@ class BackgroundSyncRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     source: str
     status: str
     started_at: datetime
@@ -54,6 +57,7 @@ class DailyEnergyAggregateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     event_date: date
     total_sessions: int
     total_energy_kwh: Decimal
@@ -67,6 +71,7 @@ class ChargingSessionSummaryRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     source: str
     host_name: str | None
     session_id: str
@@ -87,6 +92,7 @@ class VehicleDailyAggregateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     event_date: date
     source: str
     host_name: str | None
@@ -105,6 +111,7 @@ class ChargerDailyAggregateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    tenant_key: str
     event_date: date
     source: str
     host_name: str | None

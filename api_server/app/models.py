@@ -22,9 +22,13 @@ class TimestampMixin:
     )
 
 
-class DailyEnergyAggregate(TimestampMixin, Base):
+class TenantMixin:
+    tenant_key: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class DailyEnergyAggregate(TenantMixin, TimestampMixin, Base):
     __tablename__ = "daily_energy_aggregates"
-    __table_args__ = (UniqueConstraint("event_date", name="uq_daily_energy_aggregates_event_date"),)
+    __table_args__ = (UniqueConstraint("tenant_key", "event_date", name="uq_daily_energy_aggregates_tenant_event_date"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -36,10 +40,10 @@ class DailyEnergyAggregate(TimestampMixin, Base):
     source_breakdown: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
-class ChargingSessionSummary(TimestampMixin, Base):
+class ChargingSessionSummary(TenantMixin, TimestampMixin, Base):
     __tablename__ = "charging_session_summaries"
     __table_args__ = (
-        UniqueConstraint("source", "session_id", "vehicle_id", name="uq_charging_session_summaries_source_session_vehicle"),
+        UniqueConstraint("tenant_key", "source", "session_id", "vehicle_id", name="uq_charging_session_summaries_tenant_source_session_vehicle"),
         Index("ix_charging_session_summaries_started", "started_at"),
         Index("ix_charging_session_summaries_vehicle", "vehicle_id"),
     )
@@ -61,10 +65,10 @@ class ChargingSessionSummary(TimestampMixin, Base):
     state_counts: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
-class VehicleDailyAggregate(TimestampMixin, Base):
+class VehicleDailyAggregate(TenantMixin, TimestampMixin, Base):
     __tablename__ = "vehicle_daily_aggregates"
     __table_args__ = (
-        UniqueConstraint("event_date", "source", "vehicle_id", name="uq_vehicle_daily_aggregates_date_source_vehicle"),
+        UniqueConstraint("tenant_key", "event_date", "source", "vehicle_id", name="uq_vehicle_daily_aggregates_tenant_date_source_vehicle"),
         Index("ix_vehicle_daily_aggregates_date", "event_date"),
     )
 
@@ -83,10 +87,10 @@ class VehicleDailyAggregate(TimestampMixin, Base):
     sample_count: Mapped[int] = mapped_column(nullable=False, default=0)
 
 
-class ChargerDailyAggregate(TimestampMixin, Base):
+class ChargerDailyAggregate(TenantMixin, TimestampMixin, Base):
     __tablename__ = "charger_daily_aggregates"
     __table_args__ = (
-        UniqueConstraint("event_date", "source", "charger_id", name="uq_charger_daily_aggregates_date_source_charger"),
+        UniqueConstraint("tenant_key", "event_date", "source", "charger_id", name="uq_charger_daily_aggregates_tenant_date_source_charger"),
         Index("ix_charger_daily_aggregates_date", "event_date"),
     )
 
@@ -105,12 +109,13 @@ class ChargerDailyAggregate(TimestampMixin, Base):
 class PrometheusInstance(TimestampMixin, Base):
     __tablename__ = "prometheus_instances"
 
+    tenant_key: Mapped[str] = mapped_column(Text, primary_key=True)
     instance: Mapped[str] = mapped_column(Text, primary_key=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     labels: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
-class PrometheusMetricSnapshot(TimestampMixin, Base):
+class PrometheusMetricSnapshot(TenantMixin, TimestampMixin, Base):
     __tablename__ = "prometheus_metric_snapshots"
     __table_args__ = (
         Index(
@@ -129,10 +134,10 @@ class PrometheusMetricSnapshot(TimestampMixin, Base):
     labels: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
-class LokiVehicleSnapshot(TimestampMixin, Base):
+class LokiVehicleSnapshot(TenantMixin, TimestampMixin, Base):
     __tablename__ = "loki_vehicle_snapshots"
     __table_args__ = (
-        UniqueConstraint("line_hash", name="uq_loki_vehicle_snapshots_line_hash"),
+        UniqueConstraint("tenant_key", "line_hash", name="uq_loki_vehicle_snapshots_tenant_line_hash"),
         Index("ix_loki_vehicle_snapshots_host_sampled", "host_name", "sampled_at"),
         Index("ix_loki_vehicle_snapshots_session", "session_id"),
         Index("ix_loki_vehicle_snapshots_topic_device", "topic_device_id"),
@@ -160,7 +165,7 @@ class LokiVehicleSnapshot(TimestampMixin, Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
 
-class BackgroundSyncRun(TimestampMixin, Base):
+class BackgroundSyncRun(TenantMixin, TimestampMixin, Base):
     __tablename__ = "background_sync_runs"
     __table_args__ = (Index("ix_background_sync_runs_source_started", "source", "started_at"),)
 

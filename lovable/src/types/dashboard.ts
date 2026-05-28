@@ -22,6 +22,8 @@ export interface ChargingSession {
   id: string;
   vehicleId: string;
   chargerId: string;
+  startedAt?: string;
+  endedAt?: string;
   date: string;
   startTime: string;
   endTime: string;

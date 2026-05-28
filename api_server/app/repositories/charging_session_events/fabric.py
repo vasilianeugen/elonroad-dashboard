@@ -146,6 +146,8 @@ def _parse_fabric_payload(
         _as_string(payload.get("host_name"))
         or _as_string(payload.get("HostName"))
         or _as_string(payload.get("Instance"))
+        or device_id
+        or device_name
         or fallback_host_name
         or "fabric"
     )

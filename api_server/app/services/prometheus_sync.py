@@ -38,12 +38,13 @@ async def run_prometheus_sync_loop() -> None:
 
 async def sync_prometheus_once() -> int:
     settings = get_settings()
+    tenant_key = settings.data_tenant_key
     client = PrometheusClient(settings)
     started_at = datetime.now(timezone.utc)
     logger.info("Prometheus sync started")
 
     with SessionLocal() as db:
-        sync_run = BackgroundSyncRun(source="prometheus", status="running", started_at=started_at)
+        sync_run = BackgroundSyncRun(tenant_key=tenant_key, source="prometheus", status="running", started_at=started_at)
         db.add(sync_run)
         db.commit()
         db.refresh(sync_run)
@@ -57,6 +58,7 @@ async def sync_prometheus_once() -> int:
             for instance in selected_instances:
                 db.merge(
                     PrometheusInstance(
+                        tenant_key=tenant_key,
                         instance=instance,
                         last_seen_at=datetime.now(timezone.utc),
                         labels={},
@@ -70,11 +72,12 @@ async def sync_prometheus_once() -> int:
                     instance,
                 )
                 for metric in metrics:
+                    metric["tenant_key"] = tenant_key
                     db.add(PrometheusMetricSnapshot(**metric))
                     rows_written += 1
 
             db.flush()
-            daily_rows = rebuild_prometheus_daily_energy_aggregates_in_session(db)
+            daily_rows = rebuild_prometheus_daily_energy_aggregates_in_session(db, tenant_key=tenant_key)
 
             sync_run.status = "success"
             sync_run.finished_at = datetime.now(timezone.utc)
@@ -114,8 +117,13 @@ async def backfill_prometheus_history(
 
 
 async def sync_prometheus_since_last_sample(step_seconds: int = 60) -> dict[str, int | str]:
+    tenant_key = get_settings().data_tenant_key
     with SessionLocal() as db:
-        last_sampled_at = db.scalar(select(func.max(PrometheusMetricSnapshot.sampled_at)))
+        last_sampled_at = db.scalar(
+            select(func.max(PrometheusMetricSnapshot.sampled_at)).where(
+                PrometheusMetricSnapshot.tenant_key == tenant_key,
+            )
+        )
 
     if last_sampled_at is None:
         logger.info("Prometheus startup catch-up skipped: no existing samples")
@@ -146,6 +154,7 @@ async def backfill_prometheus_range(
     message: str | None = None,
 ) -> dict[str, int | str]:
     settings = get_settings()
+    tenant_key = settings.data_tenant_key
     client = PrometheusClient(settings)
     start = _as_utc(start)
     end = _as_utc(end)
@@ -161,6 +170,7 @@ async def backfill_prometheus_range(
 
     with SessionLocal() as db:
         sync_run = BackgroundSyncRun(
+            tenant_key=tenant_key,
             source=source,
             status="running",
             started_at=started_at,
@@ -181,6 +191,7 @@ async def backfill_prometheus_range(
             for selected_instance in selected_instances:
                 db.merge(
                     PrometheusInstance(
+                        tenant_key=tenant_key,
                         instance=selected_instance,
                         last_seen_at=datetime.now(timezone.utc),
                         labels={},
@@ -198,6 +209,7 @@ async def backfill_prometheus_range(
                     rows_fetched += len(metrics)
                     existing_keys = _existing_snapshot_keys(
                         db,
+                        tenant_key=tenant_key,
                         instance=selected_instance,
                         metric_name=metric_name,
                         start=start,
@@ -207,6 +219,7 @@ async def backfill_prometheus_range(
                         key = _snapshot_key(metric["sampled_at"], metric["labels"])
                         if key in existing_keys:
                             continue
+                        metric["tenant_key"] = tenant_key
                         db.add(PrometheusMetricSnapshot(**metric))
                         existing_keys.add(key)
                         rows_written += 1
@@ -219,7 +232,7 @@ async def backfill_prometheus_range(
                         rows_written,
                     )
 
-            aggregate_rows = rebuild_prometheus_daily_energy_aggregates_in_session(db)
+            aggregate_rows = rebuild_prometheus_daily_energy_aggregates_in_session(db, tenant_key=tenant_key)
 
             sync_run.status = "success"
             sync_run.finished_at = datetime.now(timezone.utc)
@@ -262,12 +275,14 @@ async def backfill_prometheus_range(
 
 def _existing_snapshot_keys(
     db,
+    tenant_key: str,
     instance: str,
     metric_name: str,
     start: datetime,
     end: datetime,
 ) -> set[tuple[datetime, str]]:
     stmt = select(PrometheusMetricSnapshot.sampled_at, PrometheusMetricSnapshot.labels).where(
+        PrometheusMetricSnapshot.tenant_key == tenant_key,
         PrometheusMetricSnapshot.instance == instance,
         PrometheusMetricSnapshot.metric_name == metric_name,
         PrometheusMetricSnapshot.sampled_at >= start,

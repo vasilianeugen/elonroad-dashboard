@@ -216,9 +216,7 @@ export const SessionDetailsTable = ({
               <SortHeader field="date" label={language === "en" ? "Date" : "Datum"} />
               <SortHeader field="vehicle" label={language === "en" ? "Vehicle" : "Fordon"} />
               <SortHeader field="charger" label={language === "en" ? "Charger" : "Laddare"} />
-              <TableHead className="whitespace-nowrap">
-                {language === "en" ? "Start Time" : "Starttid"}
-              </TableHead>
+              <SortHeader field="startTime" label={language === "en" ? "Start Time" : "Starttid"} />
               <TableHead className="whitespace-nowrap">
                 {language === "en" ? "End Time" : "Sluttid"}
               </TableHead>

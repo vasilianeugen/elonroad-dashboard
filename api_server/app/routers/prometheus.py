@@ -76,12 +76,18 @@ async def run_prometheus_backfill_now(
 @router.get("/sync/runs", response_model=list[BackgroundSyncRunRead])
 def list_sync_runs(
     source: str = Query(default="prometheus"),
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[BackgroundSyncRun]:
+    selected_tenant = tenant_key or settings.data_tenant_key
     stmt = (
         select(BackgroundSyncRun)
-        .where(BackgroundSyncRun.source == source)
+        .where(
+            BackgroundSyncRun.tenant_key == selected_tenant,
+            BackgroundSyncRun.source == source,
+        )
         .order_by(BackgroundSyncRun.started_at.desc())
         .limit(limit)
     )
@@ -91,14 +97,19 @@ def list_sync_runs(
 @router.get("/telemetry/snapshots/latest", response_model=list[PrometheusMetricSnapshotRead])
 def get_latest_snapshots(
     instance: str | None = Query(default=None),
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> list[PrometheusMetricSnapshot]:
     selected_instance = instance or settings.prometheus_default_instance
+    selected_tenant = tenant_key or settings.data_tenant_key
     stmt = (
         select(PrometheusMetricSnapshot)
-        .where(PrometheusMetricSnapshot.instance == selected_instance)
+        .where(
+            PrometheusMetricSnapshot.tenant_key == selected_tenant,
+            PrometheusMetricSnapshot.instance == selected_instance,
+        )
         .order_by(PrometheusMetricSnapshot.sampled_at.desc())
         .limit(limit)
     )

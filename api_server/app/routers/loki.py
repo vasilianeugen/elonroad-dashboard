@@ -41,12 +41,15 @@ async def run_loki_sync_now(
 @router.get("/telemetry/loki/latest", response_model=list[LokiVehicleSnapshotRead])
 def get_latest_loki_snapshots(
     host_name: str | None = Query(default=None),
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> list[LokiVehicleSnapshot]:
+    selected_tenant = tenant_key or settings.data_tenant_key
     stmt = (
         select(LokiVehicleSnapshot)
+        .where(LokiVehicleSnapshot.tenant_key == selected_tenant)
         .order_by(LokiVehicleSnapshot.sampled_at.desc())
         .limit(limit)
     )

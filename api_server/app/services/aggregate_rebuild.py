@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select
 
+from app.config import get_settings
 from app.db import SessionLocal
 from app.models import (
     ChargerDailyAggregate,
@@ -39,38 +40,55 @@ class RebuildCounts:
 
 
 def rebuild_prometheus_daily_energy_aggregates(instance: str | None = None) -> dict[str, int]:
+    tenant_key = get_settings().data_tenant_key
     with SessionLocal() as db:
-        counts = rebuild_ui_aggregates_in_session(db, instance=instance)
+        counts = rebuild_ui_aggregates_in_session(db, instance=instance, tenant_key=tenant_key)
         db.commit()
         return counts.as_dict()
 
 
-def rebuild_prometheus_daily_energy_aggregates_in_session(db, instance: str | None = None) -> int:
-    return rebuild_ui_aggregates_in_session(db, instance=instance).daily_rows
+def rebuild_prometheus_daily_energy_aggregates_in_session(
+    db,
+    instance: str | None = None,
+    tenant_key: str | None = None,
+) -> int:
+    tenant_key = tenant_key or get_settings().data_tenant_key
+    return rebuild_ui_aggregates_in_session(db, instance=instance, tenant_key=tenant_key).daily_rows
 
 
-def rebuild_ui_aggregates_in_session(db, instance: str | None = None) -> RebuildCounts:
-    db.query(DailyEnergyAggregate).delete()
-    db.query(ChargingSessionSummary).delete()
-    db.query(VehicleDailyAggregate).delete()
-    db.query(ChargerDailyAggregate).delete()
+def rebuild_ui_aggregates_in_session(
+    db,
+    instance: str | None = None,
+    tenant_key: str | None = None,
+) -> RebuildCounts:
+    tenant_key = tenant_key or get_settings().data_tenant_key
+    db.query(DailyEnergyAggregate).filter(DailyEnergyAggregate.tenant_key == tenant_key).delete()
+    db.query(ChargingSessionSummary).filter(ChargingSessionSummary.tenant_key == tenant_key).delete()
+    db.query(VehicleDailyAggregate).filter(VehicleDailyAggregate.tenant_key == tenant_key).delete()
+    db.query(ChargerDailyAggregate).filter(ChargerDailyAggregate.tenant_key == tenant_key).delete()
 
     counts = RebuildCounts()
-    vehicle_daily_rows = _build_loki_session_and_vehicle_aggregates(db)
-    charger_daily_rows = _build_prometheus_charger_daily_aggregates(db, instance=instance)
+    vehicle_daily_rows = _build_loki_session_and_vehicle_aggregates(db, tenant_key=tenant_key)
+    charger_daily_rows = _build_prometheus_charger_daily_aggregates(db, instance=instance, tenant_key=tenant_key)
     db.flush()
-    counts.session_rows = db.query(ChargingSessionSummary).count()
+    counts.session_rows = (
+        db.query(ChargingSessionSummary)
+        .filter(ChargingSessionSummary.tenant_key == tenant_key)
+        .count()
+    )
     counts.vehicle_daily_rows = vehicle_daily_rows
     counts.charger_daily_rows = charger_daily_rows
-    counts.daily_rows = _build_daily_aggregates(db)
+    counts.daily_rows = _build_daily_aggregates(db, tenant_key=tenant_key)
     db.flush()
     return counts
 
 
-def _build_loki_session_and_vehicle_aggregates(db) -> int:
+def _build_loki_session_and_vehicle_aggregates(db, tenant_key: str) -> int:
     rows = list(
         db.scalars(
-            select(LokiVehicleSnapshot).order_by(
+            select(LokiVehicleSnapshot).where(
+                LokiVehicleSnapshot.tenant_key == tenant_key,
+            ).order_by(
                 LokiVehicleSnapshot.session_id,
                 LokiVehicleSnapshot.topic_device_id,
                 LokiVehicleSnapshot.sampled_at,
@@ -115,14 +133,18 @@ def _build_loki_session_and_vehicle_aggregates(db) -> int:
             else Decimal("0")
         )
         energy_kwh = max(meter_energy_kwh, transfer_energy_kwh)
+        if energy_kwh <= Decimal("0"):
+            continue
 
         state_counts = Counter(
             row.energy_link_state or row.device_state or "unknown"
             for row in session_rows
         )
+        source = str(first.labels.get("source") or "loki") if isinstance(first.labels, dict) else "loki"
         db.add(
             ChargingSessionSummary(
-                source="loki",
+                tenant_key=tenant_key,
+                source=source,
                 host_name=first.host_name,
                 session_id=session_id,
                 vehicle_id=vehicle_id,
@@ -145,7 +167,7 @@ def _build_loki_session_and_vehicle_aggregates(db) -> int:
             key,
             {
                 "event_date": event_date,
-                "source": "loki",
+                "source": source,
                 "host_name": first.host_name,
                 "vehicle_id": vehicle_id,
                 "vehicle_name": first.vehicle_name,
@@ -178,6 +200,7 @@ def _build_loki_session_and_vehicle_aggregates(db) -> int:
         session_count = acc["total_sessions"] or 1
         db.add(
             VehicleDailyAggregate(
+                tenant_key=tenant_key,
                 event_date=acc["event_date"],
                 source=acc["source"],
                 host_name=acc["host_name"],
@@ -200,16 +223,18 @@ def _build_loki_session_and_vehicle_aggregates(db) -> int:
     return len(vehicle_day_accumulator)
 
 
-def _build_prometheus_charger_daily_aggregates(db, instance: str | None = None) -> int:
+def _build_prometheus_charger_daily_aggregates(db, instance: str | None = None, tenant_key: str | None = None) -> int:
+    tenant_key = tenant_key or get_settings().data_tenant_key
     selected_by_instance_date: dict[tuple[str, date], dict] = {}
     for metric_name in ENERGY_COUNTER_METRICS_BY_PRIORITY:
-        metric_rows = _prometheus_daily_energy_rows_for_metric(db, metric_name, instance=instance)
+        metric_rows = _prometheus_daily_energy_rows_for_metric(db, metric_name, instance=instance, tenant_key=tenant_key)
         for key, row in metric_rows.items():
             selected_by_instance_date.setdefault(key, row)
 
     for (row_instance, event_date), row in selected_by_instance_date.items():
         db.add(
             ChargerDailyAggregate(
+                tenant_key=tenant_key,
                 event_date=event_date,
                 source="prometheus",
                 host_name=row_instance,
@@ -224,14 +249,23 @@ def _build_prometheus_charger_daily_aggregates(db, instance: str | None = None) 
     return len(selected_by_instance_date)
 
 
-def _prometheus_daily_energy_rows_for_metric(db, metric_name: str, instance: str | None = None) -> dict[tuple[str, date], dict]:
+def _prometheus_daily_energy_rows_for_metric(
+    db,
+    metric_name: str,
+    instance: str | None = None,
+    tenant_key: str | None = None,
+) -> dict[tuple[str, date], dict]:
+    tenant_key = tenant_key or get_settings().data_tenant_key
     stmt = (
         select(
             PrometheusMetricSnapshot.instance,
             PrometheusMetricSnapshot.sampled_at,
             PrometheusMetricSnapshot.value,
         )
-        .where(PrometheusMetricSnapshot.metric_name == metric_name)
+        .where(
+            PrometheusMetricSnapshot.tenant_key == tenant_key,
+            PrometheusMetricSnapshot.metric_name == metric_name,
+        )
         .order_by(PrometheusMetricSnapshot.instance, PrometheusMetricSnapshot.sampled_at)
     )
     if instance is not None:
@@ -264,10 +298,10 @@ def _prometheus_daily_energy_rows_for_metric(db, metric_name: str, instance: str
     return rows
 
 
-def _build_daily_aggregates(db) -> int:
+def _build_daily_aggregates(db, tenant_key: str) -> int:
     daily: dict[date, dict] = {}
 
-    for row in db.scalars(select(VehicleDailyAggregate)).all():
+    for row in db.scalars(select(VehicleDailyAggregate).where(VehicleDailyAggregate.tenant_key == tenant_key)).all():
         acc = daily.setdefault(row.event_date, _daily_accumulator())
         acc["sessions"] += row.total_sessions
         acc["loki_energy_kwh"] += Decimal(row.total_energy_kwh)
@@ -276,7 +310,7 @@ def _build_daily_aggregates(db) -> int:
         acc["vehicles"].add(row.vehicle_id)
         acc["sources"][row.source] += Decimal(row.total_energy_kwh)
 
-    for row in db.scalars(select(ChargerDailyAggregate)).all():
+    for row in db.scalars(select(ChargerDailyAggregate).where(ChargerDailyAggregate.tenant_key == tenant_key)).all():
         acc = daily.setdefault(row.event_date, _daily_accumulator())
         acc["prometheus_energy_kwh"] += Decimal(row.total_energy_kwh)
         acc["chargers"].add(row.charger_id)
@@ -287,6 +321,7 @@ def _build_daily_aggregates(db) -> int:
         total_energy_kwh = max(acc["loki_energy_kwh"], acc["prometheus_energy_kwh"])
         db.add(
             DailyEnergyAggregate(
+                tenant_key=tenant_key,
                 event_date=event_date,
                 total_sessions=acc["sessions"],
                 total_energy_kwh=total_energy_kwh,
@@ -313,9 +348,11 @@ def _daily_accumulator() -> dict:
     }
 
 
-def _select_energy_counter_metric(db, instance: str | None = None) -> str | None:
+def _select_energy_counter_metric(db, instance: str | None = None, tenant_key: str | None = None) -> str | None:
+    tenant_key = tenant_key or get_settings().data_tenant_key
     for metric_name in ENERGY_COUNTER_METRICS_BY_PRIORITY:
         stmt = select(func.count(PrometheusMetricSnapshot.id)).where(
+            PrometheusMetricSnapshot.tenant_key == tenant_key,
             PrometheusMetricSnapshot.metric_name == metric_name
         )
         if instance is not None:
@@ -338,10 +375,18 @@ def _latest_non_empty(values) -> str | None:
 
 
 def _loki_session_key(row: LokiVehicleSnapshot) -> str | None:
-    return (
+    session_id = (
         _payload_transfer_session_correlation_id(row.payload)
         or row.session_id
     )
+    if not session_id:
+        return None
+
+    started_at = row.session_started_at or _payload_transfer_session_start(row.payload)
+    if not started_at:
+        return session_id
+
+    return f"{session_id}::{started_at.isoformat()}"
 
 
 def _payload_transfer_session_correlation_id(payload: dict | None) -> str | None:
@@ -354,6 +399,22 @@ def _payload_transfer_session_correlation_id(payload: dict | None) -> str | None
         .get("CorrelationId")
     )
     return str(value) if value else None
+
+
+def _payload_transfer_session_start(payload: dict | None) -> datetime | None:
+    if not isinstance(payload, dict):
+        return None
+    value = (
+        payload.get("EnergyLink", {})
+        .get("TransferSession", {})
+        .get("Start")
+    )
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def _transfer_session_energy_wh_values(payload: dict | None) -> list[Decimal]:

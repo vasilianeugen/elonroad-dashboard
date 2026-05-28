@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Elonroad Energy API"
     database_url: str = "postgresql+psycopg://elonroad:elonroad@db:5432/elonroad"
+    data_tenant_key: str = "loki"
 
     prometheus_base_url: str | None = None
     loki_base_url: str | None = None
@@ -25,6 +26,9 @@ class Settings(BaseSettings):
     loki_sync_interval_seconds: int = Field(default=300, ge=30, le=3600)
     loki_sync_lookback_minutes: int = Field(default=120, ge=1, le=10080)
     charging_session_source: Literal["loki", "fabric"] = "loki"
+    events_sync_enabled: bool | None = None
+    events_startup_lookback_days: int = Field(default=0, ge=0, le=365)
+    events_startup_chunk_hours: int = Field(default=24, ge=1, le=168)
     session_event_sync_enabled: bool | None = None
 
     fabric_kql_query_uri: str | None = None
@@ -71,7 +75,11 @@ class Settings(BaseSettings):
 
     @property
     def charging_session_sync_enabled(self) -> bool:
-        return self.session_event_sync_enabled if self.session_event_sync_enabled is not None else self.loki_sync_enabled
+        if self.session_event_sync_enabled is not None:
+            return self.session_event_sync_enabled
+        if self.events_sync_enabled is not None:
+            return self.events_sync_enabled
+        return self.loki_sync_enabled
 
 
 @lru_cache

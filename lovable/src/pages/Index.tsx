@@ -216,6 +216,8 @@ const Index = () => {
         id: row.session_id,
         vehicleId: row.vehicle_id,
         chargerId: row.host_name,
+        startedAt: row.started_at,
+        endedAt: row.ended_at,
         date: start.date,
         startTime: start.time,
         endTime: end.time,

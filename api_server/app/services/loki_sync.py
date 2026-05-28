@@ -25,13 +25,13 @@ async def run_loki_sync_loop() -> None:
     try:
         await sync_loki_since_last_sample()
     except Exception:
-        logger.exception("Loki startup catch-up failed")
+        logger.exception("Charging session event startup catch-up failed")
 
     while True:
         try:
             await sync_loki_once()
         except Exception:
-            logger.exception("Loki sync iteration failed")
+            logger.exception("Charging session event sync iteration failed")
         await asyncio.sleep(settings.loki_sync_interval_seconds)
 
 
@@ -45,46 +45,101 @@ async def sync_loki_once(host_name: str | None = None, lookback_minutes: int | N
         start=started_window_at,
         end=finished_at,
         host_name=selected_host,
-        source="loki",
+        source="events",
         message=f"lookback_minutes={selected_lookback} host_name={selected_host or 'all'}",
     )
     return int(result["rows_written"])
 
 
 async def sync_loki_since_last_sample(host_name: str | None = None) -> dict[str, int | str]:
+    settings = get_settings()
+    tenant_key = settings.data_tenant_key
+    end = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        stmt = select(func.max(LokiVehicleSnapshot.sampled_at))
+        stmt = select(func.max(LokiVehicleSnapshot.sampled_at)).where(
+            LokiVehicleSnapshot.tenant_key == tenant_key,
+        )
         if host_name:
             stmt = stmt.where(LokiVehicleSnapshot.host_name == host_name)
         last_sampled_at = db.scalar(stmt)
 
+    startup_floor = (
+        end - timedelta(days=settings.events_startup_lookback_days)
+        if settings.events_startup_lookback_days > 0
+        else None
+    )
     if last_sampled_at is None:
-        logger.info("Loki startup catch-up skipped: no existing snapshots")
-        return {"status": "skipped", "reason": "no_existing_snapshots"}
+        if startup_floor is None:
+            logger.info("Charging session event startup catch-up skipped: no existing snapshots")
+            return {"status": "skipped", "reason": "no_existing_snapshots"}
+        start = startup_floor
+    else:
+        last_sampled_at = _as_utc(last_sampled_at)
+        start = min(last_sampled_at, startup_floor) if startup_floor else last_sampled_at
 
-    start = _as_utc(last_sampled_at)
-    end = datetime.now(timezone.utc)
     if start >= end:
-        logger.info("Loki startup catch-up skipped: last_sampled_at=%s is current", start.isoformat())
+        logger.info("Charging session event startup catch-up skipped: last_sampled_at=%s is current", start.isoformat())
         return {"status": "skipped", "reason": "already_current", "start": start.isoformat(), "end": end.isoformat()}
 
-    return await sync_loki_range(
+    return await sync_loki_range_chunked(
         start=start,
         end=end,
         host_name=host_name,
-        source="loki_startup_catchup",
+        source="startup_catchup",
         message=f"startup catch-up start={start.isoformat()} end={end.isoformat()} host_name={host_name or 'all'}",
+        chunk_hours=settings.events_startup_chunk_hours,
     )
+
+
+async def sync_loki_range_chunked(
+    start: datetime,
+    end: datetime,
+    host_name: str | None = None,
+    source: str = "events",
+    message: str | None = None,
+    chunk_hours: int = 24,
+) -> dict[str, int | str]:
+    start = _as_utc(start)
+    end = _as_utc(end)
+    chunk_size = timedelta(hours=chunk_hours)
+    cursor = start
+    total_fetched = 0
+    total_written = 0
+    chunks = 0
+
+    while cursor < end:
+        chunk_end = min(cursor + chunk_size, end)
+        result = await sync_loki_range(
+            start=cursor,
+            end=chunk_end,
+            host_name=host_name,
+            source=source,
+            message=message,
+        )
+        total_fetched += int(result.get("rows_fetched", 0))
+        total_written += int(result.get("rows_written", 0))
+        chunks += 1
+        cursor = chunk_end
+
+    return {
+        "status": "ok",
+        "chunks": chunks,
+        "rows_fetched": total_fetched,
+        "rows_written": total_written,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+    }
 
 
 async def sync_loki_range(
     start: datetime,
     end: datetime,
     host_name: str | None = None,
-    source: str = "loki",
+    source: str = "events",
     message: str | None = None,
 ) -> dict[str, int | str]:
     settings = get_settings()
+    tenant_key = settings.data_tenant_key
     repository = get_charging_session_event_repository(settings)
     selected_host = host_name
     start = _as_utc(start)
@@ -101,6 +156,7 @@ async def sync_loki_range(
 
     with SessionLocal() as db:
         sync_run = BackgroundSyncRun(
+            tenant_key=tenant_key,
             source=f"{repository.source_name}_{source}" if repository.source_name != "loki" else source,
             status="running",
             started_at=started_at,
@@ -109,6 +165,7 @@ async def sync_loki_range(
         db.add(sync_run)
         db.commit()
         db.refresh(sync_run)
+        sync_run_id = sync_run.id
 
         rows_written = 0
         try:
@@ -123,19 +180,24 @@ async def sync_loki_range(
                 existing_hashes = set(
                     db.scalars(
                         select(LokiVehicleSnapshot.line_hash).where(
+                            LokiVehicleSnapshot.tenant_key == tenant_key,
                             LokiVehicleSnapshot.line_hash.in_(hashes)
                         )
                     ).all()
                 )
 
+            seen_hashes = set(existing_hashes)
             for snapshot in snapshots:
-                if snapshot["line_hash"] in existing_hashes:
+                line_hash = snapshot["line_hash"]
+                if line_hash in seen_hashes:
                     continue
+                seen_hashes.add(line_hash)
+                snapshot["tenant_key"] = tenant_key
                 db.add(LokiVehicleSnapshot(**snapshot))
                 rows_written += 1
 
             db.flush()
-            aggregate_counts = rebuild_ui_aggregates_in_session(db)
+            aggregate_counts = rebuild_ui_aggregates_in_session(db, tenant_key=tenant_key)
             sync_run.status = "success"
             sync_run.finished_at = datetime.now(timezone.utc)
             sync_run.rows_written = rows_written
@@ -160,10 +222,13 @@ async def sync_loki_range(
                 "end": end.isoformat(),
             }
         except Exception as exc:
-            sync_run.status = "failed"
-            sync_run.finished_at = datetime.now(timezone.utc)
-            sync_run.message = str(exc)
-            sync_run.rows_written = rows_written
+            db.rollback()
+            failed_run = db.get(BackgroundSyncRun, sync_run_id)
+            if failed_run is not None:
+                failed_run.status = "failed"
+                failed_run.finished_at = datetime.now(timezone.utc)
+                failed_run.message = str(exc)
+                failed_run.rows_written = rows_written
             db.commit()
             logger.exception(
                 "Charging session event range sync failed: configured_source=%s source=%s rows_written=%s",

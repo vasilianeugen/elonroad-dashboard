@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.models import ChargerDailyAggregate, ChargingSessionSummary, DailyEnergyAggregate, VehicleDailyAggregate
 from app.schemas import (
@@ -20,18 +21,26 @@ router = APIRouter()
 @router.post("/aggregates/rebuild/prometheus")
 def rebuild_prometheus_aggregates(
     instance: str | None = Query(default=None),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, int | str]:
     counts = rebuild_prometheus_daily_energy_aggregates(instance=instance)
-    return {"status": "ok", "source": "all", **counts}
+    return {"status": "ok", "tenant_key": settings.data_tenant_key, "source": "all", **counts}
 
 
 @router.get("/aggregates/daily", response_model=list[DailyEnergyAggregateRead])
 def list_daily_aggregates(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
+    tenant_key: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[DailyEnergyAggregate]:
-    stmt = select(DailyEnergyAggregate).order_by(DailyEnergyAggregate.event_date)
+    selected_tenant = tenant_key or settings.data_tenant_key
+    stmt = (
+        select(DailyEnergyAggregate)
+        .where(DailyEnergyAggregate.tenant_key == selected_tenant)
+        .order_by(DailyEnergyAggregate.event_date)
+    )
     if from_date is not None:
         stmt = stmt.where(DailyEnergyAggregate.event_date >= from_date)
     if to_date is not None:
@@ -43,13 +52,16 @@ def list_daily_aggregates(
 def list_vehicle_daily_aggregates(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=2000),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[VehicleDailyAggregate]:
+    selected_tenant = tenant_key or settings.data_tenant_key
     stmt = select(VehicleDailyAggregate).order_by(
         VehicleDailyAggregate.event_date.desc(),
         VehicleDailyAggregate.total_energy_kwh.desc(),
-    )
+    ).where(VehicleDailyAggregate.tenant_key == selected_tenant)
     if from_date is not None:
         stmt = stmt.where(VehicleDailyAggregate.event_date >= from_date)
     if to_date is not None:
@@ -61,13 +73,16 @@ def list_vehicle_daily_aggregates(
 def list_charger_daily_aggregates(
     from_date: date | None = Query(default=None),
     to_date: date | None = Query(default=None),
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=2000),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[ChargerDailyAggregate]:
+    selected_tenant = tenant_key or settings.data_tenant_key
     stmt = select(ChargerDailyAggregate).order_by(
         ChargerDailyAggregate.event_date.desc(),
         ChargerDailyAggregate.total_energy_kwh.desc(),
-    )
+    ).where(ChargerDailyAggregate.tenant_key == selected_tenant)
     if from_date is not None:
         stmt = stmt.where(ChargerDailyAggregate.event_date >= from_date)
     if to_date is not None:
@@ -77,8 +92,16 @@ def list_charger_daily_aggregates(
 
 @router.get("/sessions/summaries", response_model=list[ChargingSessionSummaryRead])
 def list_session_summaries(
+    tenant_key: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> list[ChargingSessionSummary]:
-    stmt = select(ChargingSessionSummary).order_by(ChargingSessionSummary.started_at.desc()).limit(limit)
+    selected_tenant = tenant_key or settings.data_tenant_key
+    stmt = (
+        select(ChargingSessionSummary)
+        .where(ChargingSessionSummary.tenant_key == selected_tenant)
+        .order_by(ChargingSessionSummary.started_at.desc())
+        .limit(limit)
+    )
     return list(db.scalars(stmt).all())
