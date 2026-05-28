@@ -10,16 +10,24 @@ export interface DashboardNowResponse {
   };
   loki: {
     status: string;
-    latest_snapshot?: {
+    sampled_at?: string;
+    snapshot?: DashboardLokiSnapshot | null;
+    latest_snapshot?: DashboardLokiSnapshot | null;
+  };
+}
+
+export interface DashboardLokiSnapshot {
       vehicle_id?: string;
       vehicle_name?: string;
       vehicle_type?: string;
+      topic_device_id?: string;
+      host_name?: string;
       session_id?: string;
       energy_link_state?: string;
       meter_total_input_wh?: string;
+      meter_voltage_v?: string;
+      meter_current_a?: string;
       sampled_at?: string;
-    };
-  };
 }
 
 export interface DailyEnergyAggregate {

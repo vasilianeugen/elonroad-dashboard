@@ -1,0 +1,2 @@
+class ChargingSessionEventRepositoryError(RuntimeError):
+    pass

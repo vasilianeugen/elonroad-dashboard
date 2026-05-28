@@ -48,8 +48,16 @@ const LIVE_COLORS = [
 ];
 
 const MIN_CHARGING_SESSION_KWH = 0.0001;
+const LIVE_CHARGING_MAX_AGE_MS = 5 * 60 * 1000;
 
 const atNoon = (iso: string) => new Date(`${iso}T12:00:00`);
+
+const isRecentIsoTimestamp = (iso: string | undefined, maxAgeMs: number) => {
+  if (!iso) return false;
+  const timestamp = new Date(iso).getTime();
+  if (!Number.isFinite(timestamp)) return false;
+  return Date.now() - timestamp <= maxAgeMs;
+};
 
 const Index = () => {
   const { t } = useLanguage();
@@ -219,6 +227,26 @@ const Index = () => {
       };
     });
   }, [liveData?.sessions]);
+
+  const liveChargingSelection = useMemo(() => {
+    const snapshot = liveData?.now.loki.snapshot ?? liveData?.now.loki.latest_snapshot ?? null;
+    const sampledAt = snapshot?.sampled_at ?? liveData?.now.loki.sampled_at;
+    const isChargingNow =
+      liveData?.now.loki.status === "ok" &&
+      snapshot?.energy_link_state === "Connected" &&
+      isRecentIsoTimestamp(sampledAt, LIVE_CHARGING_MAX_AGE_MS);
+
+    if (!isChargingNow || !snapshot) {
+      return { vehicleIds: [] as string[], chargerIds: [] as string[] };
+    }
+
+    const vehicleId = snapshot.topic_device_id ?? snapshot.vehicle_id;
+    const chargerId = snapshot.host_name ?? liveData?.now.host_name;
+    return {
+      vehicleIds: vehicleId ? [vehicleId] : [],
+      chargerIds: chargerId ? [chargerId] : [],
+    };
+  }, [liveData?.now]);
 
   const zeroEnergySessionCount = useMemo(
     () => (liveData?.sessions ?? []).filter((row) => toNumber(row.energy_kwh) <= MIN_CHARGING_SESSION_KWH).length,
@@ -396,11 +424,13 @@ const Index = () => {
             selectedVehicles={selectedVehicles}
             onSelectionChange={setSelectedVehicles}
             vehicles={liveVehicles}
+            chargingVehicleIds={liveChargingSelection.vehicleIds}
           />
           <ChargerSelector
             selectedChargers={selectedChargers}
             onSelectionChange={setSelectedChargers}
             chargers={liveChargers}
+            chargingChargerIds={liveChargingSelection.chargerIds}
           />
         </div>
         

@@ -1,20 +1,23 @@
 import type { ChargerStats } from "@/types/dashboard";
 import { cn } from "@/lib/utils";
-import { Check, Zap } from "lucide-react";
+import { BatteryCharging, Check, Zap } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 interface ChargerSelectorProps {
   selectedChargers: string[];
   onSelectionChange: (chargers: string[]) => void;
   chargers?: ChargerStats[];
+  chargingChargerIds?: string[];
 }
 
 export const ChargerSelector = ({
   selectedChargers,
   onSelectionChange,
   chargers = [],
+  chargingChargerIds = [],
 }: ChargerSelectorProps) => {
   const { language } = useLanguage();
+  const chargingChargerSet = new Set(chargingChargerIds);
 
   const toggleCharger = (chargerId: string) => {
     if (selectedChargers.includes(chargerId)) {
@@ -64,6 +67,7 @@ export const ChargerSelector = ({
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 sm:gap-2">
         {chargers.map((charger) => {
           const isSelected = selectedChargers.includes(charger.id);
+          const isCharging = chargingChargerSet.has(charger.id);
           return (
             <button
               key={charger.id}
@@ -87,6 +91,14 @@ export const ChargerSelector = ({
                   {charger.totalSessions} {language === "en" ? "sessions" : "sessioner"}
                 </p>
               </div>
+              {isCharging && (
+                <span
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-600 ring-1 ring-emerald-500/25"
+                  title={language === "en" ? "Charging now" : "Laddar nu"}
+                >
+                  <BatteryCharging className="h-3.5 w-3.5" />
+                </span>
+              )}
               {isSelected && (
                 <Check className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-primary shrink-0" />
               )}

@@ -4,47 +4,12 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
-from typing import Any, Protocol
+from typing import Any, TYPE_CHECKING
 
-from app.config import Settings
-from app.services.loki_client import LokiClient
+from app.repositories.charging_session_events.exceptions import ChargingSessionEventRepositoryError
 
-
-class ChargingSessionEventRepositoryError(RuntimeError):
-    pass
-
-
-class ChargingSessionEventRepository(Protocol):
-    source_name: str
-
-    async def query_vehicle_snapshots(
-        self,
-        host_name: str | None,
-        start: datetime,
-        end: datetime,
-    ) -> list[dict[str, Any]]:
-        ...
-
-
-def get_charging_session_event_repository(settings: Settings) -> ChargingSessionEventRepository:
-    if settings.charging_session_source == "fabric":
-        return FabricKqlChargingSessionEventRepository(settings)
-    return LokiChargingSessionEventRepository(settings)
-
-
-class LokiChargingSessionEventRepository:
-    source_name = "loki"
-
-    def __init__(self, settings: Settings):
-        self.client = LokiClient(settings)
-
-    async def query_vehicle_snapshots(
-        self,
-        host_name: str | None,
-        start: datetime,
-        end: datetime,
-    ) -> list[dict[str, Any]]:
-        return await self.client.query_vehicle_snapshots(host_name=host_name, start=start, end=end)
+if TYPE_CHECKING:
+    from app.config import Settings
 
 
 class FabricKqlChargingSessionEventRepository:
@@ -76,6 +41,9 @@ class FabricKqlChargingSessionEventRepository:
         table = self.settings.fabric_kql_table
         name_column = _safe_identifier(self.settings.fabric_kql_name_column)
         payload_column = _safe_identifier(self.settings.fabric_kql_payload_column)
+
+        if not query_uri:
+            raise ChargingSessionEventRepositoryError("Fabric query URI is not configured.")
 
         if self.settings.azure_tenant_id and self.settings.azure_client_id and self.settings.azure_client_secret:
             kcsb = KustoConnectionStringBuilder.with_aad_application_key_authentication(
@@ -160,18 +128,19 @@ def _parse_fabric_payload(
 
     session = device_payload.get("Session") if isinstance(device_payload.get("Session"), dict) else {}
     identity = payload.get("Id") if isinstance(payload.get("Id"), dict) else {}
-    device_id = _as_string(identity.get("Id"))
-    device_type = _as_string(identity.get("Type"))
-    device_version = _as_string(identity.get("Version"))
+    device_id = _as_string(identity.get("Id")) if identity else None
+    device_type = _as_string(identity.get("Type")) if identity else None
+    device_version = _as_string(identity.get("Version")) if identity else None
     device_name = _as_string(payload.get("Name"))
     sampled_at = _parse_datetime(payload.get("Timestamp")) or sampled_at
 
     session_id = _as_string(
         _get_nested(transfer_session, "RemoteDevice", "CorrelationId")
-    ) or _as_string(session.get("Id"))
+    ) or (session and _as_string(session.get("Id"))) or None
     session_started_at = (
         _parse_datetime(transfer_session.get("Start"))
-        or _parse_datetime(session.get("Start"))
+        or (session and _parse_datetime(session.get("Start")))
+        or None
     )
     host_name = (
         _as_string(payload.get("host_name"))
