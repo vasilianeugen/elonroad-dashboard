@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-elonroad}
+      POSTGRES_USER: ${POSTGRES_USER:-elonroad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-elonroad}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-elonroad} -d ${POSTGRES_DB:-elonroad}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://elonroad:elonroad@db:5432/elonroad}
+      PROMETHEUS_BASE_URL: ${PROMETHEUS_BASE_URL:-http://51.12.222.74:8080/prometheus}
+      LOKI_BASE_URL: ${LOKI_BASE_URL:-http://51.12.222.74:8080/loki}
+      PROMETHEUS_USERNAME: ${PROMETHEUS_USERNAME:-moredevs}
+      PROMETHEUS_PASSWORD: ${PROMETHEUS_PASSWORD:-}
+      LOKI_USERNAME: ${LOKI_USERNAME:-}
+      LOKI_PASSWORD: ${LOKI_PASSWORD:-}
+      PROMETHEUS_DEFAULT_INSTANCE: ${PROMETHEUS_DEFAULT_INSTANCE:-rpi-m1-ac-14-006}
+      PROMETHEUS_SYNC_ENABLED: ${PROMETHEUS_SYNC_ENABLED:-false}
+      PROMETHEUS_SYNC_INTERVAL_SECONDS: ${PROMETHEUS_SYNC_INTERVAL_SECONDS:-60}
+      LOKI_DEFAULT_HOST_NAME: ${LOKI_DEFAULT_HOST_NAME:-rpi-m1-ac-14-006}
+      LOKI_SYNC_ENABLED: ${LOKI_SYNC_ENABLED:-false}
+      LOKI_SYNC_INTERVAL_SECONDS: ${LOKI_SYNC_INTERVAL_SECONDS:-300}
+      LOKI_SYNC_LOOKBACK_MINUTES: ${LOKI_SYNC_LOOKBACK_MINUTES:-120}
+      CHARGING_SESSION_SOURCE: ${CHARGING_SESSION_SOURCE:-loki}
+      FABRIC_KQL_QUERY_URI: ${FABRIC_KQL_QUERY_URI:-}
+      FABRIC_KQL_INGESTION_URI: ${FABRIC_KQL_INGESTION_URI:-}
+      FABRIC_KQL_DATABASE: ${FABRIC_KQL_DATABASE:-}
+      FABRIC_KQL_TABLE: ${FABRIC_KQL_TABLE:-ExportEvent}
+      FABRIC_KQL_NAME_COLUMN: ${FABRIC_KQL_NAME_COLUMN:-Name}
+      FABRIC_KQL_PAYLOAD_COLUMN: ${FABRIC_KQL_PAYLOAD_COLUMN:-Payload}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET:-}
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  postgres_data:

@@ -1,0 +1,9 @@
+alembic==1.13.3
+azure-identity==1.19.0
+azure-kusto-data==4.6.3
+fastapi==0.115.4
+httpx==0.27.2
+psycopg[binary]==3.2.3
+pydantic-settings==2.6.1
+SQLAlchemy==2.0.36
+uvicorn[standard]==0.32.0

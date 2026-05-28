@@ -1,0 +1,432 @@
+# Prometheus Charging Session ID Plan
+
+## Goal
+
+Expose the charging session identifier in Prometheus so dashboards can correlate live numeric telemetry with a charging session.
+
+Today, the full session object is available in Loki logs as `TransferSession`, including `CorrelationId`, `Start`, `End`, energy, remote device data, and state. Prometheus currently receives numeric telemetry, but it does not carry the charging session `CorrelationId` as a label.
+
+## Service Contract Note
+
+Do not build new ingestion logic that depends on `coremachine.service` logs. That service is expected to be fully replaced, so those logs are not a stable contract.
+
+The stable contract should stay around:
+
+```text
+ens.service
+datacoremachine.service
+```
+
+Their purpose is to collect device data and send it to the cloud. Any Prometheus/Loki improvement should preserve that contract instead of introducing a dependency on the old `coremachine.service` log shape.
+
+Practical consequence:
+
+```text
+Prometheus session-id work should be implemented in the data collection/export path used by ens/datacoremachine.
+Loki parsing can still read TransferSession payloads when they are produced by the stable path.
+Backend imports should not rely on coremachine-only log messages.
+```
+
+## Recommended Direction
+
+Use Prometheus for live/near-live numeric telemetry and Loki/database for full historical session objects.
+
+Do not add `correlation_id` to every high-frequency metric by default. That would create a new time series for every metric and every session, which can grow quickly.
+
+Instead, add a small set of session-aware metrics:
+
+1. Active session identity metric
+2. Active session energy metric
+3. Optional completed session summary metric
+
+## Proposed Metrics
+
+### 1. Active Session Info
+
+Metric:
+
+```text
+elonroad_charge_session_active_info
+```
+
+Type:
+
+```text
+Gauge
+```
+
+Value:
+
+```text
+1 while a session is active
+0 or absent when no session is active
+```
+
+Labels:
+
+```text
+instance
+host_name
+local_device_id
+remote_device_id
+correlation_id
+device_role
+vehicle_name
+```
+
+Purpose:
+
+This is the join point for dashboards. It lets Grafana or our backend know which `correlation_id` is currently active on a device.
+
+Example:
+
+```text
+elonroad_charge_session_active_info{
+  instance="rpi-m1-ac-14-014",
+  host_name="rpi-m1-ac-14-014",
+  local_device_id="2ccf67fae910",
+  remote_device_id="2ccf67fae91c",
+  correlation_id="00000000-0000-002c-150a-2ccf67fae910",
+  device_role="rail",
+  vehicle_name="ITS-2 (107)"
+} 1
+```
+
+### 2. Active Session Received Energy
+
+Metric:
+
+```text
+elonroad_charge_session_received_energy_joules_total
+```
+
+Type:
+
+```text
+Gauge or Counter
+```
+
+Labels:
+
+```text
+instance
+host_name
+local_device_id
+remote_device_id
+correlation_id
+device_role
+```
+
+Purpose:
+
+Expose the current energy accumulated for the active session. This should be emitted only for the active session, not for every archived historical session.
+
+### 3. Active Session Supplied Energy
+
+Metric:
+
+```text
+elonroad_charge_session_supplied_energy_joules_total
+```
+
+Use this when the local device is supplying energy rather than receiving it.
+
+### 4. Optional Completed Session Summary
+
+Metric:
+
+```text
+elonroad_charge_session_completed_energy_joules
+```
+
+Type:
+
+```text
+Gauge emitted at session completion
+```
+
+Labels:
+
+```text
+instance
+host_name
+local_device_id
+remote_device_id
+correlation_id
+device_role
+```
+
+This is useful if we want Prometheus to have a numeric completed-session marker. However, this creates one Prometheus series per completed session, so it should be enabled only if the expected number of sessions is low enough.
+
+For detailed historical sessions, Loki plus our database remains the safer source.
+
+## Where To Change The .NET Code
+
+The session object already exists in DataCore:
+
+```text
+EnergyProtocol.cs
+TransferSession
+```
+
+Important fields:
+
+```text
+TransferSession.RemoteDevice.CorrelationId
+TransferSession.Start
+TransferSession.End
+TransferSession.SuppliedEnergy
+TransferSession.ReceivedEnergy
+TransferSession.PeakSuppliedPower
+TransferSession.PeakReceivedPower
+TransferSession.LocalSoCRange
+TransferSession.RemoteSoCRange
+```
+
+The session is built/updated locally per device in:
+
+```text
+PhysicalVehicleWrapper.cs
+PhysicalRailWrapper.cs
+PhysicalAcDcWrapper.cs
+```
+
+Known useful points:
+
+```text
+PhysicalVehicleWrapper.cs
+```
+
+Use the place where `TransferSession.ReceivedEnergy` is updated and where `ToTotalEnergy()` is already used.
+
+```text
+PhysicalRailWrapper.cs
+```
+
+Use the place where `TransferSession.ReceivedEnergy` or `TransferSession.SuppliedEnergy` is updated depending on transfer direction.
+
+```text
+BaseDevice.cs
+```
+
+Use the session archive/completion path if we decide to emit the optional completed session metric.
+
+## Implementation Shape
+
+### Step 1. Add A Session Metrics Adapter
+
+Create a small metrics adapter near the existing telemetry/metrics code, for example:
+
+```text
+ChargeSessionMetrics.cs
+```
+
+Responsibilities:
+
+```text
+Publish active session info
+Publish received/supplied energy
+Publish optional completed-session summary
+Avoid publishing metrics if CorrelationId is empty
+Normalize label names
+```
+
+Pseudo-code:
+
+```csharp
+public sealed class ChargeSessionMetrics
+{
+    public void ReportActiveSession(DeviceContext device, TransferSession session)
+    {
+        var correlationId = session.RemoteDevice?.CorrelationId?.ToString();
+        if (string.IsNullOrWhiteSpace(correlationId))
+            return;
+
+        // Gauge value 1 with labels:
+        // instance, host_name, local_device_id, remote_device_id,
+        // correlation_id, device_role, vehicle_name
+    }
+
+    public void ReportSessionEnergy(DeviceContext device, TransferSession session)
+    {
+        // Convert ReceivedEnergy/SuppliedEnergy to joules.
+        // Emit only current active session values.
+    }
+
+    public void ReportCompletedSession(DeviceContext device, TransferSession session)
+    {
+        // Optional. Emit one final sample for completed sessions.
+    }
+}
+```
+
+### Step 2. Call The Adapter From Existing Wrappers
+
+Vehicle path:
+
+```text
+PhysicalVehicleWrapper.cs
+```
+
+After `TransferSession.ReceivedEnergy` is updated, call:
+
+```csharp
+chargeSessionMetrics.ReportActiveSession(...);
+chargeSessionMetrics.ReportSessionEnergy(...);
+```
+
+Rail path:
+
+```text
+PhysicalRailWrapper.cs
+```
+
+After supplied/received energy is updated, call the same adapter.
+
+Archive path:
+
+```text
+BaseDevice.cs
+```
+
+If the completed-session metric is enabled, call:
+
+```csharp
+chargeSessionMetrics.ReportCompletedSession(...);
+```
+
+### Step 3. Ensure Alloy Keeps The Label
+
+The current Alloy metrics pipeline receives OTLP metrics and forwards them with Prometheus remote write.
+
+Make sure no `write_relabel_config` drops `correlation_id`.
+
+The existing cloud remote write filter keeps selected `instance` values. That is fine. We need to preserve the new labels on the metrics that pass this filter.
+
+### Step 4. Query Example
+
+Current active session for a device:
+
+```promql
+elonroad_charge_session_active_info{instance="rpi-m1-ac-14-014"} == 1
+```
+
+Active session energy in kWh:
+
+```promql
+elonroad_charge_session_received_energy_joules_total{instance="rpi-m1-ac-14-014"} / 3600000
+```
+
+Group by session:
+
+```promql
+sum by (correlation_id, instance, remote_device_id) (
+  elonroad_charge_session_received_energy_joules_total
+) / 3600000
+```
+
+## Performance Impact
+
+There is an impact, but it depends heavily on how many metrics carry `correlation_id`.
+
+### Low Impact Approach
+
+Only add `correlation_id` to 2-4 dedicated session metrics.
+
+Expected impact:
+
+```text
+Small increase in Prometheus series count
+Small increase in remote_write payload size
+Queries remain cheap
+Good fit for live dashboards
+```
+
+This is the recommended approach.
+
+### High Impact Approach
+
+Add `correlation_id` to every existing metric, for example voltage, current, SoC, collector state, ignition state, meter values, etc.
+
+Expected impact:
+
+```text
+Large time-series cardinality increase
+More memory in Prometheus
+More disk usage
+More remote_write traffic
+Slower Grafana queries
+Harder long-term retention
+```
+
+Avoid this unless there is a strict need.
+
+### Cardinality Example
+
+Assume:
+
+```text
+20 devices
+25 metrics per device
+30 sessions per device per day
+30 days retention
+```
+
+If every metric gets `correlation_id`:
+
+```text
+20 * 25 * 30 * 30 = 450,000 session-labeled series per month
+```
+
+If only 3 dedicated session metrics get `correlation_id`:
+
+```text
+20 * 3 * 30 * 30 = 54,000 session-labeled series per month
+```
+
+The second option is much safer. Actual cardinality may be lower if the active-session metric only exists while a session is active, but Prometheus still stores historical series for retention.
+
+## Data Model Recommendation
+
+Use this split:
+
+```text
+Prometheus:
+  Live numeric values
+  Active session correlation_id
+  Active session energy/current/power
+
+Loki:
+  Full TransferSession payload
+  CorrelationId
+  Start/End
+  EnergyMix details
+  raw session state
+
+Backend database:
+  Aggregated daily/session tables for Lovable UI
+  Historical dashboard queries
+```
+
+## Acceptance Criteria
+
+1. A live active charge session exposes `correlation_id` in Prometheus.
+2. The session energy metric can be queried by `correlation_id`.
+3. Existing high-frequency metrics are not all relabeled with `correlation_id`.
+4. Alloy forwards the new labels to local and cloud Prometheus.
+5. The backend can read the active `correlation_id` from Prometheus and correlate it with Loki/database sessions.
+6. Grafana query performance remains acceptable after at least one week of normal usage.
+
+## Suggested First Implementation
+
+Start with only:
+
+```text
+elonroad_charge_session_active_info
+elonroad_charge_session_received_energy_joules_total
+elonroad_charge_session_supplied_energy_joules_total
+```
+
+Do not implement completed-session metrics initially. We already have completed session data in Loki and the backend database.
+
+After validating cardinality and Grafana performance, decide if a completed-session metric is still needed.

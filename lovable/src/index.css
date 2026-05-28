@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    --background: 40 33% 96%;
+    --foreground: 220 30% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 30% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 30% 15%;
+
+    --primary: 16 85% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 40 25% 92%;
+    --secondary-foreground: 220 30% 15%;
+
+    --muted: 40 20% 90%;
+    --muted-foreground: 220 15% 45%;
+
+    --accent: 220 30% 18%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 16 85% 55%;
+
+    --radius: 0.5rem;
+
+    /* Custom Elonroad tokens */
+    --coral: 16 85% 55%;
+    --navy: 220 30% 18%;
+    --cream: 40 33% 96%;
+    --success: 152 60% 42%;
+    --warning: 38 92% 55%;
+    --info: 200 80% 50%;
+    
+    /* Vehicle colors */
+    --vehicle-001: 16 85% 55%;
+    --vehicle-002: 200 80% 50%;
+    --vehicle-003: 152 60% 42%;
+    --vehicle-004: 280 60% 55%;
+  }
+
+  .dark {
+    --background: 220 30% 10%;
+    --foreground: 40 33% 96%;
+    
+    --card: 220 30% 14%;
+    --card-foreground: 40 33% 96%;
+    
+    --popover: 220 30% 14%;
+    --popover-foreground: 40 33% 96%;
+    
+    --primary: 16 85% 55%;
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 220 25% 18%;
+    --secondary-foreground: 40 33% 96%;
+    
+    --muted: 220 20% 20%;
+    --muted-foreground: 220 15% 60%;
+    
+    --accent: 40 33% 96%;
+    --accent-foreground: 220 30% 10%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 220 20% 22%;
+    --input: 220 20% 22%;
+    --ring: 16 85% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'DM Sans', 'Inter', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'DM Sans', sans-serif;
+    @apply tracking-tight;
+  }
+}
+
+@layer components {
+  .elonroad-card {
+    @apply bg-card rounded-xl border border-border shadow-sm;
+  }
+
+  .stat-highlight {
+    @apply text-primary font-bold;
+  }
+
+  .vehicle-badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+  }
+
+  .control-panel {
+    @apply bg-card rounded-xl border border-border p-4;
+  }
+
+  .data-table {
+    @apply w-full text-sm;
+  }
+
+  .data-table th {
+    @apply text-left py-3 px-4 font-semibold text-muted-foreground border-b border-border;
+  }
+
+  .data-table td {
+    @apply py-3 px-4 border-b border-border;
+  }
+
+  .data-table tr:hover {
+    @apply bg-secondary/50;
+  }
+
+  .metric-card {
+    @apply bg-card rounded-xl border border-border p-6 transition-all duration-200 hover:shadow-md hover:border-primary/30;
+  }
+
+  .section-header {
+    @apply text-2xl font-bold text-foreground mb-2;
+  }
+
+  .section-subheader {
+    @apply text-muted-foreground mb-6;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out forwards;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.5s ease-out forwards;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
